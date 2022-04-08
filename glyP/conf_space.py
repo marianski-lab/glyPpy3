@@ -85,7 +85,7 @@ class Space(list):
 
         return self.__getitem(slice(i,j))
 
-    def load_dir(self, path, topol=None, software='g16'):
+    def load_dir(self, path, topol=None, software='g16', sort_atoms = False):
         """Loads a directory with data files to be processed. The path is just the name of the directory, the function will handle the presence of multiple directories within it.
 
         :param path: (string) this is the path to the directory with all the conformer data. This directory should be filled with other directories with the intended name of the conformer and it's .xyz and input.log files
@@ -109,7 +109,7 @@ class Space(list):
                                     conf.connectivity_matrix(distXX=1.65, distXH=1.25)
 
                                     if conf.Nmols == 1:
-                                        conf.assign_atoms() ; conf.measure_c6() ; conf.measure_glycosidic() ; conf.measure_ring()
+                                        conf.assign_atoms( sort_atoms = sort_atoms) ; conf.measure_c6() ; conf.measure_glycosidic() ; conf.measure_ring()
                                         #print(conf)
                                         self.append(conf)
                                     else: 
@@ -135,7 +135,7 @@ class Space(list):
                             conf.connectivity_matrix(distXX=1.65, distXH=1.25)
 
                             if conf.Nmols == 1:
-                                conf.assign_atoms() ; conf.measure_c6() ; conf.measure_glycosidic() ; conf.measure_ring()
+                                conf.assign_atoms(sort_atoms = sort_atoms) ; conf.measure_c6() ; conf.measure_glycosidic() ; conf.measure_ring()
                                 #print(conf)
                                 self.append(conf)
                             else: 
@@ -163,7 +163,7 @@ class Space(list):
                 for at in range(conf.NAtoms):
                     out.write("{0:3s}{1:12.3f}{2:12.3f}{3:12.3f}\n".format(conf.atoms[at], conf.xyz[at][0], conf.xyz[at][1], conf.xyz[at][2]))
 
-    def load_models(self, path):
+    def load_models(self, path, sort_atoms = False):
         """Loads a set of specific models used of analysis
         """
         self.models = []
@@ -184,8 +184,8 @@ class Space(list):
 
             print("{0:10s}:   ".format(conf._id), end='')
             conf.ring = [] ; conf.ring_angle = [] ; conf.dih_angle = []
-            conf.connectivity_matrix(distXX=1.6, distXH=1.15)
-            conf.assign_atoms() ; conf.measure_c6() ; conf.measure_ring() ; conf.measure_glycosidic()
+            conf.connectivity_matrix(distXX=1.65, distXH=1.25)
+            conf.assign_atoms(sort_atoms = sort_atoms) ; conf.measure_c6() ; conf.measure_ring() ; conf.measure_glycosidic()
             if hasattr(conf, 'graph'):
                 for e in conf.graph.edges:
                     edge = conf.graph.edges[e]
@@ -355,7 +355,7 @@ class Space(list):
         else:
             return None 
         
-        if   hasattr(self[0], 'Frel'):  out.write ("{0:>23s}{1:>16s}{2:>20s}{3:>8s}{4:>10s}{5:>10s}\n".format('id', 'topol',  'F-abs', 'E', 'H', 'F'))
+        if   hasattr(self[0], 'Frel'):  out.write ("{0:>23s}{1:>16s}{2:>20s}{3:>8s}{4:>8s}{5:>8s}\n".format('id', 'topol',  'F-abs', 'E', 'H', 'F'))
         elif hasattr(self[0], 'Erel'):  out.write ("{0:>23s}{1:>16s}{2:>20s}{3:>8s}\n".format('id', 'topol',  'E-abs', 'E')) 
         else:                           out.write ("{0:>23s}{1:>16s}\n".format('id','topol'))
  
@@ -367,7 +367,7 @@ class Space(list):
  
                 try: hasattr(conf, 'Frel')
                 except: continue
-                out.writet("{0:3d}{1:>20s}{2:>16s}{3:20.8f}{4:8.2f}{5:8.2f}{6:8.2f}".format(n, conf._id, conf.topol, conf.F, conf.Erel*self._Ha2kcal, conf.Hrel*self._Ha2kcal, conf.Frel*self._Ha2kcal))
+                out.write("{0:3d}{1:>20s}{2:>16s}{3:20.8f}{4:8.2f}{5:8.2f}{6:8.2f}".format(n, conf._id, conf.topol, conf.F, conf.Erel*self._Ha2kcal, conf.Hrel*self._Ha2kcal, conf.Frel*self._Ha2kcal))
  
             elif hasattr(self[0], 'Erel'):
  
@@ -398,28 +398,46 @@ class Space(list):
 
 
 
-    def remove_duplicates(self, rmsd = 0.1):
+    def remove_duplicates(self, rmsd = 0.1, Hydrogen=True):
         """Removes duplicate conformers from the space
         """
+
+        if Hydrogen == False:
+            atoms = set(self[0].atoms)
+            atoms.remove('H')
+
+        elif Hydrogen == True: 
+            atoms = set(self[0].atoms)
+
+        elif Hydrogen == "polar":
+            atoms = []
+            for n, at in enumerate(self[0].atoms):
+
+                if at == 'H': 
+                    if ('O' or 'N') in [self[0].atoms[x] for x in adjacent_atoms(self[0].conn_mat, n)]: atoms.append(n)
+                else: 
+                    atoms.append(n)
+        print(atoms)
         to_be_removed = []
         for i, conf1  in enumerate(self):
             for j, conf2 in enumerate(self):
                 if j <= i : continue
-                if calculate_rmsd(conf1, conf2) < rmsd:
+                if calculate_rmsd(conf1, conf2, atoms) < rmsd:
                     to_be_removed.append(j)
 
-        to_be_removed.reverse() 
+        to_be_removed = list(set(to_be_removed))
+        to_be_removed.sort()
+        to_be_removed.reverse()
         for rem in to_be_removed:
+            #print(rem)
             del self[rem]
 
-
     def rmsd_matrix(self, Hydrogen=True):
-
 
         atoms = set(self[0].atoms)
         if Hydrogen == False: 
             atoms.remove('H')
-        print(atoms)
+        #print(atoms)
         self.rmsd_mat = np.zeros((len(self), len(self)))
 
         for i, conf1  in enumerate(self):
@@ -528,7 +546,8 @@ class Space(list):
         #marker ={ 'LeX': 'o',       'LeA': 'o'      , 'BGH-2': 'o'      , 'BGH-1':'o'      , 'a16': 'o',       'b16':'o'      , 'a14': 'o'      , 'b14': 'o'      , 'a13': 'o'      , 'b13': 'o'      ,'a16n':'o'      ,'b16n':'o'      , 'a12n': 'o'      }
 
         #color =  [ '#a6cee3', '#1f78b4', '#b2df8a','#33a02c', '#fb9a99', '#e31a1c', '#fdbf6f' , '#ff7f00', '#cab2d6', '#6a3d9a', '#ffff99','#b15928']
-        color = ['#1f78b4', '#e31a1c', '#33a02c']
+        #color = ['#1f78b4', '#e31a1c', '#33a02c','#ff7f00']
+        color = ['#a6cee3', '#1f78b4', '#fb9a99', '#e31a1c']
 
 
         labels = [None] * len(self)
@@ -543,20 +562,24 @@ class Space(list):
             Hs_label.append('unknown')
 
         for l in labels: 
-            if l[-3:] == '_Hs' or l[-2:] == '_M': 
+            if l[-3:] == '_Hs' or l[-2:] == '_M':
                 labels.remove(l) 
                 Hs_label.append(l)
+            if l[-2:] == 'kg':
+                l = l[:-3]
 
         color = dict(zip(labels, color))
         for l in Hs_label: 
             color[l] = '#000000'
+
+        #color['unknown'] = '#000000'
 
         print(color)
 
         #['#a6cee3','#1f78b4','#b2df8a','#33a02c','#fb9a99','#e31a1c','#fdbf6f','#ff7f00','#cab2d6','#6a3d9a','#ffff99','#b15928']
         nullfmt = NullFormatter()         # no labels
 
-        fig, ax = plt.subplots(1, figsize=(6,10))
+        fig, ax = plt.subplots(1, figsize=(4,8))
 
         ax.plot([ccs_exp, ccs_exp], [ymin, ymax], 'k--')
 
@@ -576,9 +599,11 @@ class Space(list):
         elif energy_function == 'F':  ylabel = '$\Delta$F PBE0+D3 [kcal/mol]'
 
         ax.set_ylabel(ylabel, fontsize=18) ; ax.set_xlabel(xlabel, fontsize=18)
-        yaxis = np.linspace(ymin+1, ymax, 7)
+        yaxis = np.linspace(ymin+1, ymax, 6)
         xaxis = np.linspace(xmin, xmax, 5)
-        ax.set_xlim(xmin-2.5, xmax+2.5)
+
+        x_extend = 0.0
+        ax.set_xlim(xmin-x_extend, xmax+x_extend)
         ax.set_ylim(ymin, ymax)
         ax.set_xticks(xaxis); ax.set_yticks(yaxis)
         ax.set_xticklabels(xaxis, fontsize='16'); ax.set_yticklabels(yaxis, fontsize='16')
@@ -589,8 +614,8 @@ class Space(list):
         ax.xaxis.set_major_formatter(FormatStrFormatter('%.0f'))
         ax.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
 
-        ax.plot([xmin-2.5,xmax+2.5], [ymin+0.05, ymin+0.05], 'k', lw=1.5)
-        ax.plot([xmin-2.5+0.1, xmin-2.5+0.1], [0,ymax], 'k', lw=1.5)
+        ax.plot([xmin-x_extend,xmax+x_extend], [ymin+0.05, ymin+0.05], 'k', lw=1.5)
+        ax.plot([xmin-x_extend+0.1, xmin-x_extend+0.1], [0,ymax], 'k', lw=1.5)
         fig.tight_layout()
         if output: 
             #fig.savefig('/'.join([output, 'ccs_plot.png']), dpi=200, transparent=True)

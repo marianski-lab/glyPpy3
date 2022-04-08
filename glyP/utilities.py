@@ -148,7 +148,7 @@ def ring_canon(theta):
   
   return canon
 
-def determine_carried_atoms(at1, at2, conn_mat):
+def determine_carried_atoms(at1, at2, conf):
 
   """Find all atoms necessary to be carried over during rotation
   of an atom 2
@@ -158,7 +158,7 @@ def determine_carried_atoms(at1, at2, conn_mat):
   :param conn_matt: the connectivity matrix of a conformer
   """
   #   1. Zero the connections in connectivity matrix
-  tmp_conn = np.copy(conn_mat)
+  tmp_conn = np.copy(conf.conn_mat)
   tmp_conn[at1, at2] = 0
   tmp_conn[at2, at1] = 0
   cm = networkx.graph.Graph(tmp_conn)
@@ -175,6 +175,9 @@ def determine_carried_atoms(at1, at2, conn_mat):
           #   List of indexes of connected atoms:
           conn_atoms = np.where(tmp_conn[at] != 0)[0]
           conn_atoms.tolist
+          conn_atoms_names = [ conf.atoms[x] for x in conn_atoms ] 
+          conn_atoms.sort()
+          conn_atoms = [x for _, x in sorted(zip(conn_atoms_names, conn_atoms))]
           for x in conn_atoms:
               if x not in carried_atoms:
                   carried_atoms.append(x)
@@ -390,12 +393,12 @@ def set_dihedral(conf, list_of_atoms, new_dih, incr = False,  axis_pos = "bond",
   if axis_pos == "bond":
       translation = (xyz[list_of_atoms[1], :]+xyz[list_of_atoms[2], :])/2
   #   Determine which atoms should be dragged along with the bond:
-      carried_atoms = determine_carried_atoms(at2,at3, conf.conn_mat)
+      carried_atoms = determine_carried_atoms(at2,at3, conf)
 
   elif axis_pos == "term":
       translation = np.array([x for x in xyz[list_of_atoms[3], :]])
       #Determine which atoms should be dragged along with the bond:
-      carried_atoms = determine_carried_atoms(at3,at4, conf.conn_mat)
+      carried_atoms = determine_carried_atoms(at3,at4, conf)
       carried_atoms.remove(at4)
       #print(carried_atoms)
 
@@ -644,7 +647,7 @@ def set_ring_pucker(conf, ring_number,ring_pucker=None):
           rot = expm(np.cross(np.eye(3), axor*rot_angle)) ; translation = conf.xyz[op_atoms[1], :]
 
           #Determine which atoms should be dragged along with the bond:
-          carried_atoms = determine_carried_atoms(ra['O'], op_atoms[1], conf.conn_mat) #Bond with 'O' is zeroed anyway.
+          carried_atoms = determine_carried_atoms(ra['O'], op_atoms[1], conf) #Bond with 'O' is zeroed anyway.
           carried_atoms.remove(op_atoms[1])
           #rotate the atoms:
           for at in carried_atoms:
@@ -701,10 +704,17 @@ def calculate_rmsd(conf1, conf2, atoms=None):
     #exclude the specified atom
 
     if atoms != None:
-        for n, i in enumerate(conf1.atoms):
-            if i in atoms: xyz1.append(conf1.xyz[n])
-        for n, i in enumerate(conf2.atoms):
-            if i in atoms: xyz2.append(conf2.xyz[n])
+
+        if type(atoms) == set:
+            for n, i in enumerate(conf1.atoms):
+                if i in atoms: 
+                    xyz1.append(conf1.xyz[n])
+                    xyz2.append(conf2.xyz[n])
+
+        elif type(atoms) == list: 
+            for n in atoms:
+                xyz1.append(conf1.xyz[n])
+                xyz2.append(conf2.xyz[n])
     else:
         xyz1 = conf1.xyz ; xyz2 = conf2.xyz
 

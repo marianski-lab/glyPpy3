@@ -221,7 +221,6 @@ class Conformer():
         #except IOError: 
         #    print("%30s not accessible", file_path)
         #    return 1 
-            
         if software == "g16" : 
 
             normal_mode_flag=False
@@ -465,64 +464,180 @@ class Conformer():
         else:
             self.Nmols = nx.number_connected_components(cm)
 
-    def assign_atoms(self):
+    def assign_atoms(self, sort_atoms = False):
+
         """ Labels each atom in the graph with its atomic symbol
         """
+
+        def get_C1s(self, cycles_in_graph): 
+
+            C1s = []
+            for r in cycles_in_graph:
+                for atom in r:
+                    if [self.atoms[x] for x in adjacent_atoms(self.conn_mat, atom)].count('O') == 2:
+                        C1s.append(atom)
+            return C1s
+
+        def order_rings(cm, C1s):
+
+            C1pos = []
+            for C1 in C1s:
+                NRed=0 #NRed = reducing end NNon = non reducing end
+                for C12 in C1s:
+                    path = nx.shortest_path(cm, C1, C12)
+                    if len(path) == 1: continue
+                    elif len(path) == 3:  #1-1 glycosidic bond, oxygen will belong to the Reducing Carb, 
+                        NRed += 0.5
+                        break
+
+                    nred = 0
+                    for r in cycles_in_graph:
+                       if path[1] not in r: nred += 1
+
+                    if nred == len(cycles_in_graph): NRed += 1
+
+                if int(NRed) != NRed:
+                    if NRed == 0.5: pass
+                    else: NRed+=1 #It's will be placed last
+                C1pos.append(NRed)
+
+            #return C1pos
+
+        #def reorder_rings(cm, C1s, ring_atoms):
+            #print(C1s, C1pos)
+
+            ring_atoms = sort_ring_atoms(self, cycles_in_graph)
+            C1s = [ i[0] for i in sorted(zip(C1s, C1pos), key=itemgetter(1)) ]
+            ring_atoms = [ i[0] for i in sorted(zip(ring_atoms, C1pos), key=itemgetter(1)) ]
+            C1pos.sort()
+            #print(C1s, C1pos)
+
+            #ring_atoms = sort_ring_atoms(self, cycles_in_graph)
+
+            for i in range(len(C1pos)):
+                for j in range(i+1, len(C1pos)):
+                    if C1pos[i] == C1pos[j]: 
+                        path = nx.shortest_path(cm, C1s[i], C1s[j])
+                        link = []
+                        #print(path)
+                        for at in path[1:-1]: 
+                            for r in ring_atoms: 
+                                if at in r.values(): 
+                                    link.append(list(r.keys())[list(r.values()).index(at)])
+
+                        #print(link)
+                        if int(link[0][-1:]) > int(link[-1][-1:]):
+                            C1pos[i] += 0.1
+                        elif int(link[0][-1:]) < int(link[-1][-1:]):
+                            C1pos[j] += 0.1 
+            C1s = [ i[0] for i in sorted(zip(C1s, C1pos), key=itemgetter(1)) ]
+            ring_atoms = [ i[0] for i in sorted(zip(ring_atoms, C1pos), key=itemgetter(1)) ]
+            C1pos.sort()
+
+            return C1s, C1pos, ring_atoms
+
+        def sort_ring_atoms(self, cycles_in_graph): 
+
+            ring_atoms = []
+
+            for r in cycles_in_graph:
+                if len(r) != 6: continue #Non six-membered rings not implemented
+
+                ring_atoms.append({}) #dictionary, probably atom desc
+                # C5 and O
+                rd = ring_atoms[-1] # rd = ring dicitionary
+                for at in r:
+                    if self.atoms[at] == 'O':
+                        rd['O'] = at #atom one of the rings
+                    else:
+                        for at2 in np.where(self.conn_mat[at] == 1)[0]:
+                            if self.atoms[at2] == 'C' and at2 not in r:
+                                rd['C5'] = at
+                                rd['C6'] = at2
+                                for at3 in adjacent_atoms(self.conn_mat, rd['C6']):
+                                    if self.atoms[at3] == 'O': rd['O6'] = at3
+
+                for at in [rd['O'], rd['C5']]: r.remove(at)
+                for at in r:
+                    if self.conn_mat[at][rd['O']] == 1: rd['C1'] = at
+                    elif self.conn_mat[at][rd['C5']] == 1: rd['C4'] = at
+                for at in [rd['C4'], rd['C1']]:  r.remove(at)
+                for at in r:
+                    if self.conn_mat[at][rd['C1']] == 1: rd['C2'] = at
+                    elif self.conn_mat[at][rd['C4']] == 1: rd['C3'] = at
+                for at in [rd['C3'], rd['C2']]:  r.remove(at)
+
+            return ring_atoms
+
+
+        def resort_atoms(self):
+
+            order = []
+            C1s = [ x['C1'] for x in ring_atoms] #get ring atoms in order
+
+            for n, C1 in enumerate(C1s):
+                for C in ["C1", "C2", "C3", "C4", "C5", "C6", "O"]:
+                    C = ring_atoms[n][C]
+                    order.append(C)
+                    for at in [ x for x in adjacent_atoms(self.conn_mat, C)]:
+                        if at not in ring_atoms[n].values() and self.atoms[at] != 'H':
+                            carried_atoms =  determine_carried_atoms(C, at, self)
+                            for a, c in enumerate(carried_atoms):
+                                if c in order or c in C1s: #Check whether last three atoms of the linkage is branched (amide for instance)
+                                    for prev_atoms in range(1,a):
+                                        #print(a, prev_atoms, carried_atoms[a], carried_atoms[a-prev_atoms])
+                                        for adj in adjacent_atoms(self.conn_mat, carried_atoms[a-prev_atoms]):
+                                            if adj not in C1s and adj not in order: order.append(adj)
+                                    break
+                                else: order.append(c)
+
+                        elif "O6" in ring_atoms[n].keys() and at == ring_atoms[n]["O6"]: #O6 is encoded in a part of the ring
+                            carried_atoms =  determine_carried_atoms(C, at, self)
+                            for c in carried_atoms:
+                                if c in order or c in C1s: break
+                                else: order.append(c)
+
+
+
+                    for at in [ x for x in adjacent_atoms(self.conn_mat, C)]:
+                        if at not in ring_atoms[n].values() and self.atoms[at] == 'H': order.append(at)
+
+            #print(order, len(order))
+
+            self.atoms =  [ self.atoms[x]  for x in order]
+            self.xyz   =  [ self.xyz[x]    for x in order]
+            self.xyz = np.array(self.xyz)
+
         self.graph = nx.DiGraph()
         cm = nx.graph.Graph(self.conn_mat)
         cycles_in_graph = nx.cycle_basis(cm) #a cycle in the conn_mat would be a ring
-        #print(cycles_in_graph)
-        atom_names = self.atoms
-        ring_atoms = []
-        n = 0
-        for r in cycles_in_graph:
-            if len(r) != 6: continue #Non six-membered rings not implemented
 
-            ring_atoms.append({}) #dictionary, probably atom desc
-            # C5 and O
-            rd = ring_atoms[n] # rd = ring dicitionary
-            for at in r:
-                if atom_names[at] == 'O':
-                    rd['O'] = at #atom one of the rings
-                else:
-                    for at2 in np.where(self.conn_mat[at] == 1)[0]:
-                        if atom_names[at2] == 'C' and at2 not in r:
-                            rd['C5'] = at
-                            rd['C6'] = at2 
-                            for at3 in adjacent_atoms(self.conn_mat, rd['C6']):
-                                if atom_names[at3] == 'O': rd['O6'] = at3
+        C1s = get_C1s(self, cycles_in_graph)
+        C1s, C1pos, ring_atoms = order_rings(cm, C1s)
+        #ring_atoms = sort_ring_atoms(self, cycles_in_graph)
 
-            for at in [rd['O'], rd['C5']]: r.remove(at)
-            for at in r:
-                if self.conn_mat[at][rd['O']] == 1: rd['C1'] = at
-                elif self.conn_mat[at][rd['C5']] == 1: rd['C4'] = at
-            for at in [rd['C4'], rd['C1']]:  r.remove(at)
-            for at in r:
-                if self.conn_mat[at][rd['C1']] == 1: rd['C2'] = at
-                elif self.conn_mat[at][rd['C4']] == 1: rd['C3'] = at
-            for at in [rd['C3'], rd['C2']]:  r.remove(at)
-            n += 1
+        #C1s = [ i[0] for i in sorted(zip(C1s, C1pos), key=itemgetter(1)) ]
+        #ring_atoms = [ i[0] for i in sorted(zip(ring_atoms, C1pos), key=itemgetter(1)) ]
 
-        #Find reduncing end and sort the list:
+        #print(self.atoms)
+        #print(C1s, ring_atoms)
 
-        C1s = [ x['C1'] for x in ring_atoms]; C1pos = []
-        for n, C1 in enumerate(C1s): 
-            NRed=0; NNon=0 #NRed = reducing end NNon = non reducing end
-            for C12 in C1s:
-                path = nx.shortest_path(cm, C1, C12)
-                if len(path) == 1: continue
-                elif len(path) == 3:  #1-1 glycosidic bond, oxygen will belong to the Reducing Carb, 
-                     NRed += 0.5
-                elif path[1] in ring_atoms[n].values(): NNon+=1
-                else: NRed += 1
-            if int(NRed) != NRed: 
-                if NRed == 0.5: pass
-                else: NRed+=1 #It's will be placed last
-            C1pos.append(NRed)
-        ring_atoms = [ i[0] for i in sorted(zip(ring_atoms, C1pos), key=itemgetter(1)) ]
+        if sort_atoms == True:
+
+            resort_atoms(self)
+            #print(self.atoms)
+            self.connectivity_matrix(distXX=1.65, distXH=1.25)
+            self.graph = nx.DiGraph()
+            cm = nx.graph.Graph(self.conn_mat)
+
+            cycles_in_graph = nx.cycle_basis(cm)
+            C1s = get_C1s(self, cycles_in_graph) 
+            C1s, C1pos, ring_atoms = order_rings(cm, C1s)
+            #print(self.atoms)
 
         for n, i in enumerate(ring_atoms): 
             self.graph.add_node(n, ring_atoms = i)
+
         for n in self.graph.nodes:
             if 'O6' not in self.graph.nodes[n]['ring_atoms'].keys(): pass 
             else: 
@@ -534,6 +649,7 @@ class Conformer():
 
         C1s = [ x['C1'] for x in ring_atoms] #Sorted list of C1s, first C1 is reducing end. 
         cycles_in_graph = nx.cycle_basis(cm) #a cycle in the conn_mat would be a ring
+
         for r1 in range(self.graph.number_of_nodes()):
             for r2 in range(self.graph.number_of_nodes()):
                 linker_atoms = [] ; linked = False
@@ -553,7 +669,7 @@ class Conformer():
                                     n += 1 ; break 
                                 elif at in self.graph.nodes[r1]['ring_atoms'].values():
                                     linker_atoms.append(at)
-                                    linked = True ; term = True  
+                                    linked = True ; term = True 
                                     linker_type = (list(self.graph.nodes[r1]['ring_atoms'].keys())[list(self.graph.nodes[r1]['ring_atoms'].values()).index(at)])[-1]
                                     if len(path) == 3:  C_psi='O' 
                                     else:               C_psi = 'C'+str(int(linker_type)-1)
@@ -731,7 +847,7 @@ class Conformer():
         xyzview.show()
         if print_xyz == True: print(XYZ)
 
-    def plot_ir(self,  xmin = 900, xmax = 1700, scaling_factor = 0.965,  plot_exp = False, exp_data = None, exp_int_split=False, normal_modes=False):
+    def plot_ir(self,  xmin = 900, xmax = 1700, scaling_factor = 0.965,  plot_exp = False, exp_data = None, exp_int_split=False, normal_modes=False, save=False, save_xyz=False):
 
         """ Plots the IR spectrum in xmin -- xmax range,
         x-axis is multiplied by scaling factor, everything
@@ -796,9 +912,16 @@ class Conformer():
 
         fig.tight_layout()
         current_path = os.getcwd()
-        output_path =  os.path.join(current_path, self.path, self._id+'.png')
+        #output_path =  os.path.join(current_path, self.path, self._id+'.png')
         #print(output_path + self._id+'.png')
-        plt.savefig(output_path, dpi=200)
+        if save == True:  
+            plt.savefig('/'.join([self.path,'ir_plot.pdf']) , dpi=300)
+
+        if save_xyz == True:
+            with open('/'.join([self.path, 'ir_harm.dat']),'w') as out:
+                for ir in self.IR:
+                    out.write("{0:10.3f}{1:103f}\n".format(ir[0], ir[1]))
+
         
     def rotation_operation(self,conf_name, conf_index, rotmat):
         """Stores the following in each conformer obj the name of the conformer it is being rotated to match, the index of that conformer and the rotation matrix.
